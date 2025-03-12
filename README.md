@@ -63,7 +63,7 @@ You can modify the following parameters in `run.py`:
 - **Feature Toggles**:
   - `enable_tracking`: Enable object tracking
   - `enable_bev`: Enable Bird's Eye View visualization
-  - `enable_pseudo_3d`: Enable pseudo-3D visualization
+  - `enable_pseudo_3d`: Enable 3D visualization
 
 ## Project Structure
 
