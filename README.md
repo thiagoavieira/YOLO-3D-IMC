@@ -86,9 +86,6 @@ YOLO-3D/
 3. **3D Box Estimation**: Combines 2D boxes with depth information to create 3D boxes
 4. **Visualization**: Renders 3D boxes and bird's eye view for better spatial understanding
 
-## License
-
-[MIT License](LICENSE)
 
 ## Acknowledgments
 
