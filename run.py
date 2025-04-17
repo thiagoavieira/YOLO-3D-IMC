@@ -12,7 +12,7 @@ from depth_model import DepthEstimator
 from bbox3d_utils import BBox3DEstimator
 
 # Configurações
-root_dir = "/dir"  # Pasta raiz com subpastas de imagens
+root_dir = '/content/dataset_acamados_teste'  # Substituído dinamicamente no Colab
 output_csv = "results.csv"
 device = 'cuda' # cpu, cuda or mps
 yolo_model_size = "extra" # YOLOv11 model size: "nano", "small", "medium", "large", "extra"
@@ -20,6 +20,26 @@ depth_model_size = "large" # Depth Anything v2 model size: "small", "base", "lar
 conf_threshold = 0.25
 iou_threshold = 0.45
 classes = [0]  # None for all classes, otherwise [0]
+
+KEYPOINTS_NAMES = [
+    "depth_nose",
+    "depth_left_eye",
+    "depth_right_eye",
+    "depth_left_ear",
+    "depth_right_ear",
+    "depth_left_shoulder",
+    "depth_right_shoulder",
+    "depth_left_elbow",
+    "depth_right_elbow",
+    "depth_left_wrist",
+    "depth_right_wrist",
+    "depth_left_hip",
+    "depth_right_hip",
+    "depth_left_knee",
+    "depth_right_knee",
+    "depth_left_ankle",
+    "depth_right_ankle"
+]
 
 # Ativar segmentacao
 use_segmentation = True
@@ -87,24 +107,12 @@ def process_image(image_path, detector, segmenter, depth_estimator, bbox3d_estim
                 class_name = detector.get_class_names()[class_id]
                 segmentation_json = None
 
-            if class_name.lower() in ['person', 'cat', 'dog']:
-                x1, y1, x2, y2 = map(int, bbox)
-                cx = int((x1 + x2) / 2)
-                head_y = y1 + int((y2 - y1) * 0.15)
-                center_y = y1 + int((y2 - y1) * 0.5)
-                feet_y = y1 + int((y2 - y1) * 0.85)
-                depth_head = depth_estimator.get_depth_at_point(depth_map, cx, head_y)
-                depth_center = depth_estimator.get_depth_at_point(depth_map, cx, center_y)
-                depth_feet = depth_estimator.get_depth_at_point(depth_map, cx, feet_y)
-                method = "multi-point"
-            else:
-                depth_head = depth_center = depth_feet = depth_estimator.get_depth_in_region(depth_map, bbox, method='median')
-                method = "median"
-
             # Buscar keypoints que batem com a bbox
             keypoints = None
             for pose_det in pose_detections:
+                x1, y1, x2, y2 = map(int, bbox)
                 px1, py1, px2, py2 = map(int, pose_det['bbox'])
+                
                 iou = bbox_iou((x1, y1, x2, y2), (px1, py1, px2, py2))
                 if iou > iou_threshold:  # threshold arbitrário
                     keypoints = pose_det.get('keypoints', None)
@@ -112,7 +120,18 @@ def process_image(image_path, detector, segmenter, depth_estimator, bbox3d_estim
 
             keypoints_json = json.dumps(keypoints) if keypoints is not None else None
 
-            results.append({
+            keypoints_depths = {}
+            if keypoints is not None:
+                for idx, (x, y) in enumerate(keypoints):
+                    if x is not None and y is not None:
+                        depth = depth_estimator.get_depth_at_point(depth_map, int(x), int(y))
+                    else:
+                        depth = None
+                    keypoints_depths[KEYPOINTS_NAMES[idx]] = depth
+            else:
+                keypoints_depths = {name: None for name in KEYPOINTS_NAMES}
+
+            result_data = {
                 "image": str(image_path),
                 "class": class_name,
                 "score": float(score),
@@ -120,14 +139,13 @@ def process_image(image_path, detector, segmenter, depth_estimator, bbox3d_estim
                 "bbox_y1": int(bbox[1]),
                 "bbox_x2": int(bbox[2]),
                 "bbox_y2": int(bbox[3]),
-                "depth_head": float(depth_head),
-                "depth_center": float(depth_center),
-                "depth_feet": float(depth_feet),
-                "depth_method": method,
                 "object_id": obj_id,
                 "segmentation": segmentation_json,
-                "keypoints": keypoints_json  # NOVO CAMPO
-            })
+                "keypoints_json": keypoints_json
+            }
+
+            result_data.update(keypoints_depths)
+            results.append(result_data)
         except Exception as e:
             print(f"[ERROR] Erro ao processar detecção em {image_path}: {e}")
             continue
