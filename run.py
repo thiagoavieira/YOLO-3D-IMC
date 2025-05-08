@@ -1,4 +1,5 @@
 import os
+import ast
 import cv2
 import numpy as np
 import torch
@@ -12,8 +13,9 @@ from depth_model import DepthEstimator
 from bbox3d_utils import BBox3DEstimator
 
 # Configurações
-root_dir = '/content/dataset_acamados_teste'  # Substituído dinamicamente no Colab
+root_dir = '/content/dataset_acamados'  # Substituído dinamicamente no Colab
 output_csv = "results.csv"
+output_masks_dir_1 = '/content/masked_results'
 device = 'cuda' # cpu, cuda or mps
 yolo_model_size = "extra" # YOLOv11 model size: "nano", "small", "medium", "large", "extra"
 depth_model_size = "large" # Depth Anything v2 model size: "small", "base", "large"
@@ -43,6 +45,63 @@ KEYPOINTS_NAMES = [
 
 # Ativar segmentacao
 use_segmentation = True
+
+def apply_mask_and_crop(image, mask_array, bbox, output_dir, image_name):
+    try:
+        if not isinstance(mask_array, np.ndarray):
+            mask_array = np.array(mask_array, dtype=np.uint8)
+        mask_resized = cv2.resize(mask_array, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+        # máscara binária
+        binary_mask = (mask_resized > 0.5).astype(np.uint8)
+
+        # máscara na imagem original
+        masked_img = np.zeros_like(image)
+        masked_img[binary_mask > 0] = image[binary_mask > 0]
+
+        # corte
+        x1, y1, x2, y2 = map(int, bbox)
+        cropped_img = masked_img[y1:y2, x1:x2]
+
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        output_path = Path(output_dir) / image_name
+        cv2.imwrite(str(output_path), cropped_img)
+
+    except Exception as e:
+        print(f"[ERROR] Falha ao aplicar máscara e cortar imagem: {e}")
+
+def apply_mask_depth_and_crop(image, mask_array, bbox, depth_map, output_dir, image_name):
+    try:
+        if not isinstance(mask_array, np.ndarray):
+            mask_array = np.array(mask_array, dtype=np.uint8)
+
+        # Normaliza o depth_map para 0-255 e converter para uint8
+        if depth_map.dtype != np.uint8:
+            normalized_depth = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX)
+            depth_map = normalized_depth.astype(np.uint8)
+
+        mask_resized = cv2.resize(mask_array, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+        binary_mask = (mask_resized > 0.5).astype(np.uint8)
+
+        masked_img = np.zeros_like(image)
+        masked_img[binary_mask > 0] = image[binary_mask > 0]
+
+        # Aplicar profundidade dentro da máscara
+        depth_colormap = cv2.applyColorMap(depth_map, cv2.COLORMAP_PLASMA)
+        masked_img[binary_mask > 0] = depth_colormap[binary_mask > 0]
+
+        x1, y1, x2, y2 = map(int, bbox)
+        cropped_img = masked_img[y1:y2, x1:x2]
+
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        output_path = Path(output_dir) / image_name
+        cv2.imwrite(str(output_path), cropped_img)
+
+    except Exception as e:
+        print(f"[ERROR] Falha ao aplicar máscara, profundidade e cortar imagem: {e}")
+
 
 def bbox_iou(boxA, boxB):
     xA = max(boxA[0], boxB[0])
@@ -78,7 +137,7 @@ def process_image(image_path, detector, segmenter, depth_estimator, bbox3d_estim
         depth_map = depth_estimator.estimate_depth(original_frame)
         normalized_depth = cv2.normalize(depth_map, None, 0, 255, cv2.NORM_MINMAX)
         depth_vis = normalized_depth.astype(np.uint8)
-        cv2.imwrite(f"/content/depth_{Path(image_path).stem}.png", depth_vis)
+        cv2.imwrite(f"/content/depth_results/depth_{Path(image_path).stem}.png", depth_vis)
     except Exception as e:
         print(f"[ERROR] Falha na profundidade para {image_path}: {e}")
         depth_map = np.zeros((height, width), dtype=np.float32)
@@ -102,6 +161,25 @@ def process_image(image_path, detector, segmenter, depth_estimator, bbox3d_estim
                 if isinstance(segmentation, np.ndarray):
                     segmentation = segmentation.tolist()
                 segmentation_json = json.dumps(segmentation) if segmentation is not None else None
+                
+                if segmentation is not None and class_id == 0:
+                    image_name = Path(image_path).name
+
+                    apply_mask_and_crop(
+                        image=original_frame,
+                        mask_array=segmentation,
+                        bbox=bbox,
+                        output_dir="/content/masked_results",
+                        image_name=image_name
+                    )
+                    apply_mask_depth_and_crop(
+                        image=original_frame,
+                        mask_array=segmentation,
+                        bbox=bbox,
+                        depth_map=depth_map,  # Depth map gerado anteriormente
+                        output_dir="/content/masked_results_with_depth",
+                        image_name=image_name
+                    )
             else:
                 bbox, score, class_id, obj_id = detection
                 class_name = detector.get_class_names()[class_id]
@@ -154,7 +232,7 @@ def process_image(image_path, detector, segmenter, depth_estimator, bbox3d_estim
 
 def main():
     print(f"Procurando imagens em {root_dir}...")
-    image_paths = list(Path(root_dir).rglob("*.[jp][pn]g"))
+    image_paths = list(Path(root_dir).rglob("**/*.[jp][pn]g"))
     print(f"{len(image_paths)} imagens encontradas.")
 
     detector = ObjectDetector(
